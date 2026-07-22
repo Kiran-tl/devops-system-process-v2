@@ -1,0 +1,161 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to deploy to production'
+        required: true
+        type: string
+      release_version:
+        description: 'Release version tag (e.g. v1.4.2)'
+        required: true
+        type: string
+      deploy_notes:
+        description: 'Optional deployment notes for the changelog'
+        required: false
+        type: string
+
+jobs:
+  # ── Step 1: Validate the PR has the correct approval label ──────────────────
+  validate:
+    name: Validate PR approval
+    runs-on: ubuntu-latest
+    outputs:
+      pr_title: ${{ steps.get_pr.outputs.title }}
+      pr_author: ${{ steps.get_pr.outputs.author }}
+      pr_branch: ${{ steps.get_pr.outputs.branch }}
+
+    steps:
+      - name: Validate label and extract PR info
+        id: get_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt('${{ inputs.pr_number }}')
+            });
+
+            const labels = pr.data.labels.map(l => l.name);
+            console.log('PR Labels:', labels);
+
+            if (!labels.includes('status: approved-for-production')) {
+              core.setFailed(
+                `❌ Deploy aborted. PR #${{ inputs.pr_number }} does not have the ` +
+                `"status: approved-for-production" label. QA must approve before deploying.`
+              );
+              return;
+            }
+
+            core.setOutput('title', pr.data.title);
+            core.setOutput('author', pr.data.user.login);
+            core.setOutput('branch', pr.data.head.ref);
+
+  # ── Step 2: Deploy with a manual approval gate ──────────────────────────────
+  deploy-production:
+    name: Deploy to Production Environment
+    needs: validate
+    runs-on: self-hosted
+    environment:
+      name: production           # Requires manual approval in GitHub Environments settings
+      url: http://workflow-playground.172.16.16.121.nip.io
+
+    steps:
+      - name: Checkout production
+        uses: actions/checkout@v4
+        with:
+          ref: staging           # Deploy from staging branch (already tested)
+
+      # ── Adapt build steps to your stack ─────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build for production
+        run: npm run build
+        env:
+          NODE_ENV: production
+      # ────────────────────────────────────────────────────────────────────────
+
+      - name: Merge PR into production
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt('${{ inputs.pr_number }}'),
+              merge_method: 'squash',
+              commit_title: `${{ needs.validate.outputs.pr_title }} (${{ inputs.release_version }})`
+            });
+            console.log('Merge result:', result.data.message);
+
+      - name: Tag the release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const mainRef = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'heads/production'
+            });
+
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${{ inputs.release_version }}`,
+              sha: mainRef.data.object.sha
+            });
+
+            // Also create a GitHub release
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: '${{ inputs.release_version }}',
+              name: '${{ inputs.release_version }} — ${{ needs.validate.outputs.pr_title }}',
+              body: `${{ inputs.deploy_notes || 'No release notes provided.' }}\n\nPR: https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${{ inputs.pr_number }}`,
+              draft: false,
+              prerelease: false
+            });
+
+      - name: Deploy to Production Server via SSH
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          echo "$SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no deploy@10.94.186.44 << 'ENDSSH'
+            cd /var/www/webapp
+            git fetch origin
+            git checkout production
+            git pull origin production
+            npm ci
+            REACT_APP_ENV=production npm run build
+          ENDSSH
+          rm -f /tmp/deploy_key
+
+      - name: Update PR label — mark as deployed to production
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = parseInt('${{ inputs.pr_number }}');
+
+            await github.rest.issues.removeLabel({
+              owner, repo, issue_number,
+              name: 'status: approved-for-production'
+            }).catch(() => {});
+
+            await github.rest.issues.addLabels({
+              owner, repo, issue_number,
+              labels: ['status: deployed-to-production']
+            });
+
