@@ -49,13 +49,12 @@ jobs:
             npm ci
             npm run build
 
-            if systemctl list-unit-files | grep -q myapp.service; then
-              systemctl restart myapp
-            elif command -v nginx >/dev/null 2>&1; then
-              systemctl reload nginx
-            else
-              echo 'No restart command configured'
-            fi
+            # Restart React app on port 8385 only
+            pkill -f 'react-scripts' || true
+            sleep 1
+            HOST=0.0.0.0 PORT=8385 BROWSER=none nohup npm start > ~/devops-system-process-v2/react.log 2>&1 &
+            sleep 5
+            ss -lntp | grep 8385
           "
 
       - name: Update labels
