@@ -21,6 +21,7 @@ jobs:
       - self-hosted
       - Linux
       - X64
+
     environment: staging
 
     env:
@@ -54,6 +55,7 @@ jobs:
               export REACT_APP_ENV
               npm ci
               npm run build
+
               if systemctl list-unit-files myapp.service >/dev/null 2>&1; then
                 systemctl restart myapp
               elif command -v nginx >/dev/null 2>&1; then
@@ -89,5 +91,9 @@ jobs:
               owner,
               repo,
               issue_number: issue,
-              body: `## Staging deploy complete\n\nBranch \`${{ env.BRANCH }}\` was deployed to LXD container \`${{ env.LXD_CONTAINER }}\`.\n\n[View run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})`
+              body: `## Staging deploy complete
+
+Branch ${process.env.BRANCH} was deployed to LXD container ${process.env.LXD_CONTAINER}.
+
+View run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
             });
