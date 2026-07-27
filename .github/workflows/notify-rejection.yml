@@ -25,7 +25,7 @@ jobs:
               issue_number: context.payload.pull_request.number,
               body: `## ❌ Feature Rejected
 
-Please fix the requested changes and push them to the same branch.
+"Please fix the requested changes and push them to the same branch."
 
 Check failure on line 28 in:
 .github/workflows/notify-rejection.yml
