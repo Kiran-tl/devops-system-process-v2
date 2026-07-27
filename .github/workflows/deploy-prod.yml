@@ -4,17 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: PR number approved for production
+        description: "Merged PR Number"
         required: true
-        type: string
-      release_version:
-        description: Release version (e.g. 1.2.0 — creates tag v1.2.0)
+      version:
+        description: "Release Version (example 1.0.0)"
         required: true
-        type: string
-
-concurrency:
-  group: deploy-production
-  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -22,68 +16,16 @@ permissions:
   issues: write
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-    outputs:
-      title: ${{ steps.pr.outputs.title }}
-      merge_commit: ${{ steps.pr.outputs.merge_commit }}
-    steps:
-      - name: Validate PR approval and merge
-        id: pr
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const prNumber = Number("${{ inputs.pr_number }}");
-            if (!Number.isFinite(prNumber) || prNumber <= 0) {
-              core.setFailed(`Invalid PR number: ${{ inputs.pr_number }}`);
-              return;
-            }
-
-            const version = "${{ inputs.release_version }}".trim();
-            if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
-              core.setFailed(`Invalid release_version '${version}'. Use semver like 1.2.0`);
-              return;
-            }
-
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
-
-            const labels = pr.data.labels.map((l) => l.name);
-            if (!labels.includes("status: approved-for-production")) {
-              core.setFailed("Missing label: status: approved-for-production");
-              return;
-            }
-
-            if (!pr.data.merged) {
-              core.setFailed(`PR #${prNumber} must be merged into production before deploying`);
-              return;
-            }
-
-            if (pr.data.base.ref !== "production") {
-              core.setFailed(`PR #${prNumber} base branch is '${pr.data.base.ref}', expected 'production'`);
-              return;
-            }
-
-            core.setOutput("title", pr.data.title);
-            core.setOutput("merge_commit", pr.data.merge_commit_sha);
-            core.info(`Validated PR #${prNumber}: ${pr.data.title}`);
-
   deploy:
-    needs: validate
+
     runs-on:
       - self-hosted
       - Linux
       - X64
-    environment: production
+
     env:
-      LXD_CONTAINER: myapp-prod
+      LXD_CONTAINER: myapp
       BRANCH: production
-      REACT_APP_ENV: production
-      RELEASE_VERSION: ${{ inputs.release_version }}
-      PR_NUMBER: ${{ inputs.pr_number }}
 
     steps:
       - name: Checkout production
@@ -92,80 +34,65 @@ jobs:
           ref: production
           fetch-depth: 0
 
+      - name: Create Release Tag
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+
+          git tag v${{ github.event.inputs.version }}
+          git push origin v${{ github.event.inputs.version }}
+
       - name: Verify LXD container
         run: |
-          set -euo pipefail
-          if ! lxc info "$LXD_CONTAINER" >/dev/null 2>&1; then
-            echo "::error::LXD container '$LXD_CONTAINER' not found on this runner"
-            exit 1
-          fi
-          echo "Deploying '$BRANCH' (v$RELEASE_VERSION) to LXD container '$LXD_CONTAINER'"
+          lxc info "$LXD_CONTAINER"
 
-      - name: Create and push release tag
+      - name: Deploy application
         run: |
-          set -euo pipefail
-          TAG="v${RELEASE_VERSION}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists"
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release ${RELEASE_VERSION} (PR #${PR_NUMBER})"
-          git push origin "$TAG"
-          echo "Created tag $TAG"
+          lxc exec "$LXD_CONTAINER" -- bash -c "
+            set -e
 
-      - name: Deploy into LXD
-        run: |
-          set -euo pipefail
-          lxc exec "$LXD_CONTAINER" \
-            --env BRANCH="$BRANCH" \
-            --env REACT_APP_ENV="$REACT_APP_ENV" \
-            -- bash -lc '
-              set -euo pipefail
-              cd "$HOME/devops-system-process-v2"
-              git fetch origin
-              git checkout "$BRANCH"
-              git pull --ff-only origin "$BRANCH"
-              export NODE_ENV=production
-              export REACT_APP_ENV
-              npm ci
-              npm run build
-              if systemctl list-unit-files myapp.service >/dev/null 2>&1; then
-                systemctl restart myapp
-              elif command -v nginx >/dev/null 2>&1; then
-                nginx -s reload || systemctl reload nginx
-              else
-                echo "Build complete — no myapp/nginx service found to restart"
-              fi
-            '
+            cd ~/devops-system-process-v2
+
+            git fetch origin
+            git checkout production
+            git pull origin production
+
+            npm ci
+            npm run build
+
+            if systemctl list-unit-files | grep -q myapp.service; then
+              systemctl restart myapp
+            elif command -v nginx >/dev/null 2>&1; then
+              systemctl reload nginx
+            else
+              echo 'No restart command configured'
+            fi
+          "
 
       - name: Update PR labels
         uses: actions/github-script@v7
         with:
           script: |
-            const issue = Number("${{ inputs.pr_number }}");
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const version = "${{ inputs.release_version }}";
+
+            const issue=Number("${{ github.event.inputs.pr_number }}");
 
             await github.rest.issues.removeLabel({
-              owner,
-              repo,
-              issue_number: issue,
-              name: "status: approved-for-production"
-            }).catch(() => {});
+              owner:context.repo.owner,
+              repo:context.repo.repo,
+              issue_number:issue,
+              name:"status: approved-for-production"
+            }).catch(()=>{});
 
             await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number: issue,
-              labels: ["status: deployed-to-production"]
+              owner:context.repo.owner,
+              repo:context.repo.repo,
+              issue_number:issue,
+              labels:["status: deployed-to-production"]
             });
 
             await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: issue,
-              body: `## Production deploy complete\n\n- Release: \`v${version}\`\n- LXD container: \`${{ env.LXD_CONTAINER }}\`\n- Branch: \`production\`\n\n[View run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})`
+              owner:context.repo.owner,
+              repo:context.repo.repo,
+              issue_number:issue,
+              body:"🚀 Production deployment completed successfully."
             });

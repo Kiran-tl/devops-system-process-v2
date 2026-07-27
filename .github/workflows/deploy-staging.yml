@@ -5,131 +5,95 @@ on:
     types:
       - labeled
 
-concurrency:
-  group: deploy-staging
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: write
   issues: write
 
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
 jobs:
-  deploy-staging:
-    if: "github.event.label.name == 'status: approved-for-staging'"
+  deploy:
+    if: github.event.label.name == 'status: approved-for-staging'
 
     runs-on:
       - self-hosted
       - Linux
       - X64
 
-    environment: staging
-
     env:
-      LXD_CONTAINER: myapp-staging
+      LXD_CONTAINER: myapp
       BRANCH: ${{ github.event.pull_request.head.ref }}
-      REACT_APP_ENV: staging
 
     steps:
-      - name: Verify LXD container
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify container exists
         run: |
-          set -euo pipefail
+          lxc info "$LXD_CONTAINER"
 
-          if ! lxc info "$LXD_CONTAINER" >/dev/null 2>&1; then
-            echo "::error::LXD container '$LXD_CONTAINER' not found"
-            exit 1
-          fi
-
-          echo "Deploying branch '$BRANCH' to '$LXD_CONTAINER'"
-
-      - name: Deploy into LXD
+      - name: Deploy application
         run: |
-          set -euo pipefail
+          lxc exec "$LXD_CONTAINER" -- bash -c "
+            set -e
 
-          lxc exec "$LXD_CONTAINER" \
-            --env BRANCH="$BRANCH" \
-            --env REACT_APP_ENV="$REACT_APP_ENV" \
-            -- bash -lc '
-              set -euo pipefail
+            cd ~/devops-system-process-v2
 
-              cd "$HOME/devops-system-process-v2"
+            git fetch origin
+            git checkout $BRANCH
+            git pull origin $BRANCH
 
-              git fetch origin
-              git checkout "$BRANCH"
-              git pull --ff-only origin "$BRANCH"
+            npm ci
+            npm run build
 
-              export NODE_ENV=production
-              export REACT_APP_ENV
+            if systemctl list-unit-files | grep -q myapp.service; then
+              systemctl restart myapp
+            elif command -v nginx >/dev/null 2>&1; then
+              systemctl reload nginx
+            else
+              echo 'No restart command configured'
+            fi
+          "
 
-              npm ci
-              npm run build
-
-              if systemctl list-unit-files myapp.service >/dev/null 2>&1; then
-                sudo systemctl restart myapp
-              elif command -v nginx >/dev/null 2>&1; then
-                sudo nginx -s reload || sudo systemctl reload nginx
-              else
-                echo "Build completed successfully."
-              fi
-            '
-
-      - name: Update PR labels
+      - name: Update labels
         if: success()
         uses: actions/github-script@v7
         with:
           script: |
-            const issue = context.payload.pull_request.number;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
+            const issue=context.payload.pull_request.number;
 
             await github.rest.issues.removeLabel({
-              owner,
-              repo,
-              issue_number: issue,
-              name: "status: approved-for-staging"
-            }).catch(() => {});
+              owner:context.repo.owner,
+              repo:context.repo.repo,
+              issue_number:issue,
+              name:"status: approved-for-staging"
+            }).catch(()=>{});
 
             await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number: issue,
-              labels: ["status: deployed-to-staging"]
+              owner:context.repo.owner,
+              repo:context.repo.repo,
+              issue_number:issue,
+              labels:["status: deployed-to-staging"]
             });
-
-            const body = [
-              "## ✅ Staging deployment completed",
-              "",
-              `Branch: ${process.env.BRANCH}`,
-              `Container: ${process.env.LXD_CONTAINER}`,
-              "",
-              `View run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
-            ].join("\n");
 
             await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: issue,
-              body
+              owner:context.repo.owner,
+              repo:context.repo.repo,
+              issue_number:issue,
+              body:"✅ Successfully deployed to Staging."
             });
 
-      - name: Handle deployment failure
+      - name: Deployment failed
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue = context.payload.pull_request.number;
-
             await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: issue,
-              body: [
-                "## ❌ Staging Deployment Failed",
-                "",
-                "The deployment to the staging environment failed.",
-                "",
-                `View run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
-              ].join("\n")
+              owner:context.repo.owner,
+              repo:context.repo.repo,
+              issue_number:context.payload.pull_request.number,
+              body:"❌ Staging deployment failed. Please check the GitHub Actions logs."
             });
