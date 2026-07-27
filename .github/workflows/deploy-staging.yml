@@ -2,75 +2,91 @@ name: Deploy to Staging
 
 on:
   pull_request:
-    types: [labeled]
+    types:
+      - labeled
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
 
 jobs:
-  deploy-staging:
+  deploy:
     name: Deploy to Staging Environment
-    if: "github.event.label.name == 'approved-for-staging'"
-    runs-on: self-hosted
-    environment:
-      name: staging
-      url: http://workflow-playground.172.16.16.121.nip.io
+    if: github.event.label.name == 'approved-for-staging'
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+
+    env:
+      LXD_CONTAINER: myapp
+      BRANCH: ${{ github.event.pull_request.head.ref }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
 
-      # ── Adapt the build steps to your stack ─────────────────────────────────
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build for staging
-        run: npm run build
-        env:
-          NODE_ENV: staging
-      # ────────────────────────────────────────────────────────────────────────
-
-      - name: Deploy to Staging Server via SSH
-        env:
-          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+      - name: Verify container exists
         run: |
-          echo "$SSH_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no deploy@10.94.186.44 << 'ENDSSH'
-            cd /var/www/webapp
-            git fetch origin
-            git checkout ${{ github.head_ref }}
-            git pull origin ${{ github.head_ref }}
-            npm ci
-            REACT_APP_ENV=staging npm run build
-          ENDSSH
-          rm -f /tmp/deploy_key
+          lxc info "$LXD_CONTAINER"
 
-      - name: Update PR label — mark as deployed to staging
+      - name: Deploy application
+        run: |
+          lxc exec "$LXD_CONTAINER" -- bash -c "
+            set -e
+
+            cd ~/devops-system-process-v2
+
+            git fetch origin
+            git checkout $BRANCH
+            git pull origin $BRANCH
+
+            npm ci
+            npm run build
+
+            if systemctl list-unit-files | grep -q myapp.service; then
+              systemctl restart myapp
+            elif command -v nginx >/dev/null 2>&1; then
+              systemctl reload nginx
+            else
+              echo 'No restart command configured'
+            fi
+          "
+
+      - name: Update labels
         if: success()
         uses: actions/github-script@v7
         with:
           script: |
-            const { owner, repo } = context.repo;
-            const issue_number = context.payload.pull_request.number;
+            const issue = context.payload.pull_request.number;
 
             await github.rest.issues.removeLabel({
-              owner, repo, issue_number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
               name: 'approved-for-staging'
             }).catch(() => {});
 
             await github.rest.issues.addLabels({
-              owner, repo, issue_number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
               labels: ['deployed-to-staging']
             });
 
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              body: '✅ Successfully deployed to Staging.'
+            });
 
-      - name: Handle deployment failure
+      - name: Deployment failed
         if: failure()
         uses: actions/github-script@v7
         with:
@@ -79,5 +95,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body: `## 🔴 Staging Deployment Failed\n\nThe automated deployment to staging failed. DevOps team has been notified.\n\n[View run details](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+              body: '❌ Staging deployment failed. Please check the GitHub Actions logs.'
             });
