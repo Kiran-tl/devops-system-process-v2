@@ -21,7 +21,7 @@ function App() {
         backdropFilter: 'blur(10px)'
       }}>
         <h1 style={{ fontSize: '3rem', margin: '0 0 12px', letterSpacing: '-1px' }}>
-          Hello DevOps Engineer3
+          Hello DevOps Engineer7
         </h1>
         <p style={{ fontSize: '1.1rem', color: '#a0aec0', margin: '0 0 24px' }}>
           Deployed via GitHub Actions CI/CD Pipeline
