@@ -41,10 +41,10 @@ jobs:
             const labels = pr.data.labels.map(l => l.name);
             console.log('PR Labels:', labels);
 
-            if (!labels.includes('status: approved-for-production')) {
+            if (!labels.includes('approved-for-production')) {
               core.setFailed(
                 `❌ Deploy aborted. PR #${{ inputs.pr_number }} does not have the ` +
-                `"status: approved-for-production" label. QA must approve before deploying.`
+                `"approved-for-production" label. QA must approve before deploying.`
               );
               return;
             }
@@ -151,11 +151,11 @@ jobs:
 
             await github.rest.issues.removeLabel({
               owner, repo, issue_number,
-              name: 'status: approved-for-production'
+              name: 'approved-for-production'
             }).catch(() => {});
 
             await github.rest.issues.addLabels({
               owner, repo, issue_number,
-              labels: ['status: deployed-to-production']
+              labels: ['deployed-to-production']
             });
 

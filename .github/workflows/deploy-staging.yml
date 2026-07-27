@@ -7,7 +7,7 @@ on:
 jobs:
   deploy-staging:
     name: Deploy to Staging Environment
-    if: "github.event.label.name == 'status: approved-for-staging'"
+    if: "github.event.label.name == 'approved-for-staging'"
     runs-on: self-hosted
     environment:
       name: staging
@@ -61,12 +61,12 @@ jobs:
 
             await github.rest.issues.removeLabel({
               owner, repo, issue_number,
-              name: 'status: approved-for-staging'
+              name: 'approved-for-staging'
             }).catch(() => {});
 
             await github.rest.issues.addLabels({
               owner, repo, issue_number,
-              labels: ['status: deployed-to-staging']
+              labels: ['deployed-to-staging']
             });
 
 

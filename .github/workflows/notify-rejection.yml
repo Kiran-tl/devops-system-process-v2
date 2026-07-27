@@ -7,7 +7,7 @@ on:
 jobs:
   notify-rejection:
     name: Notify developer of rejection
-    if: "github.event.label.name == 'status: rejected'"
+    if: "github.event.label.name == 'rejected'"
     runs-on: ubuntu-latest
 
     steps:
@@ -30,7 +30,7 @@ jobs:
                 '1. Read the reviewer/QA comments above carefully',
                 '2. Fix the issues on **this same branch** (no new branch needed)',
                 '3. Push your fixes: `git push origin ${{ github.head_ref }}`',
-                '4. Update this PR\'s label back to `status: ready-for-review`',
+                '4. Update this PR\'s label back to `ready-for-review`',
                 '',
                 'The reviewer will then re-review your changes.',
                 '',
