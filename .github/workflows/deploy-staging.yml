@@ -16,8 +16,8 @@ concurrency:
 
 jobs:
   deploy:
-    if: "github.event.label.name == 'status: approved-for-staging'"
-
+    name: Deploy to Staging Environment
+    if: github.event.label.name == 'approved-for-staging'
     runs-on:
       - self-hosted
       - Linux
@@ -63,27 +63,27 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const issue=context.payload.pull_request.number;
+            const issue = context.payload.pull_request.number;
 
             await github.rest.issues.removeLabel({
-              owner:context.repo.owner,
-              repo:context.repo.repo,
-              issue_number:issue,
-              name:"status: approved-for-staging"
-            }).catch(()=>{});
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              name: 'approved-for-staging'
+            }).catch(() => {});
 
             await github.rest.issues.addLabels({
-              owner:context.repo.owner,
-              repo:context.repo.repo,
-              issue_number:issue,
-              labels:["status: deployed-to-staging"]
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              labels: ['deployed-to-staging']
             });
 
             await github.rest.issues.createComment({
-              owner:context.repo.owner,
-              repo:context.repo.repo,
-              issue_number:issue,
-              body:"✅ Successfully deployed to Staging."
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              body: '✅ Successfully deployed to Staging.'
             });
 
       - name: Deployment failed
@@ -92,8 +92,8 @@ jobs:
         with:
           script: |
             await github.rest.issues.createComment({
-              owner:context.repo.owner,
-              repo:context.repo.repo,
-              issue_number:context.payload.pull_request.number,
-              body:"❌ Staging deployment failed. Please check the GitHub Actions logs."
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: '❌ Staging deployment failed. Please check the GitHub Actions logs.'
             });

@@ -4,11 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Merged PR Number"
+        description: 'PR number to deploy to production'
         required: true
+        type: string
       version:
-        description: "Release Version (example 1.0.0)"
+        description: 'Release version (example 1.0.0)'
         required: true
+        type: string
 
 permissions:
   contents: write
@@ -16,8 +18,40 @@ permissions:
   issues: write
 
 jobs:
-  deploy:
+  validate:
+    name: Validate PR approval
+    runs-on: ubuntu-latest
+    outputs:
+      pr_title: ${{ steps.get_pr.outputs.title }}
 
+    steps:
+      - name: Validate label and extract PR info
+        id: get_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt('${{ inputs.pr_number }}')
+            });
+
+            const labels = pr.data.labels.map(l => l.name);
+            console.log('PR Labels:', labels);
+
+            if (!labels.includes('approved-for-production')) {
+              core.setFailed(
+                `❌ Deploy aborted. PR #${{ inputs.pr_number }} does not have the ` +
+                `"approved-for-production" label. QA must approve before deploying.`
+              );
+              return;
+            }
+
+            core.setOutput('title', pr.data.title);
+
+  deploy:
+    name: Deploy to Production Environment
+    needs: validate
     runs-on:
       - self-hosted
       - Linux
@@ -25,7 +59,6 @@ jobs:
 
     env:
       LXD_CONTAINER: myapp
-      BRANCH: production
 
     steps:
       - name: Checkout production
@@ -39,8 +72,8 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@github.com
 
-          git tag v${{ github.event.inputs.version }}
-          git push origin v${{ github.event.inputs.version }}
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
 
       - name: Verify LXD container
         run: |
@@ -70,29 +103,29 @@ jobs:
           "
 
       - name: Update PR labels
+        if: success()
         uses: actions/github-script@v7
         with:
           script: |
-
-            const issue=Number("${{ github.event.inputs.pr_number }}");
+            const issue = Number('${{ inputs.pr_number }}');
 
             await github.rest.issues.removeLabel({
-              owner:context.repo.owner,
-              repo:context.repo.repo,
-              issue_number:issue,
-              name:"status: approved-for-production"
-            }).catch(()=>{});
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              name: 'approved-for-production'
+            }).catch(() => {});
 
             await github.rest.issues.addLabels({
-              owner:context.repo.owner,
-              repo:context.repo.repo,
-              issue_number:issue,
-              labels:["status: deployed-to-production"]
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              labels: ['deployed-to-production']
             });
 
             await github.rest.issues.createComment({
-              owner:context.repo.owner,
-              repo:context.repo.repo,
-              issue_number:issue,
-              body:"🚀 Production deployment completed successfully."
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              body: '🚀 Production deployment completed successfully.'
             });
