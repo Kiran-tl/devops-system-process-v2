@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   deploy-staging:
-    if: github.event.label.name == 'status: approved-for-staging'
+    if: "github.event.label.name == 'status: approved-for-staging'"
     runs-on:
       - self-hosted
       - Linux
