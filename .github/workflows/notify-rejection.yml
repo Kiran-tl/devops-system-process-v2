@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   notify:
-    if: github.event.label.name == 'status: rejected'
+    if: "github.event.label.name == 'status: rejected'"
 
     runs-on: ubuntu-latest
 
