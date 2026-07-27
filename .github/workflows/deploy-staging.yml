@@ -7,8 +7,6 @@ on:
 
 jobs:
   deploy-staging:
-    if: ${{ github.event.label.name == 'status: approved-for-staging' }}
-
     runs-on:
       - self-hosted
       - Linux
@@ -19,25 +17,30 @@ jobs:
 
     steps:
       - name: Checkout Repository
+        if: ${{ github.event.label.name == 'status: approved-for-staging' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Setup Node.js
+        if: ${{ github.event.label.name == 'status: approved-for-staging' }}
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
 
       - name: Install Dependencies
+        if: ${{ github.event.label.name == 'status: approved-for-staging' }}
         run: npm ci
 
-      - name: Build Application
+      - name: Build
+        if: ${{ github.event.label.name == 'status: approved-for-staging' }}
         run: npm run build
         env:
           NODE_ENV: staging
 
-      - name: Deploy to LXD Container
+      - name: Deploy into LXD
+        if: ${{ github.event.label.name == 'status: approved-for-staging' }}
         run: |
           lxc exec myapp -- bash -c "
             cd ~/devops-system-process-v2 &&
@@ -49,7 +52,7 @@ jobs:
           "
 
       - name: Update Labels
-        if: success()
+        if: ${{ success() && github.event.label.name == 'status: approved-for-staging' }}
         uses: actions/github-script@v7
         with:
           script: |
