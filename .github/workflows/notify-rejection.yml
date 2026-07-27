@@ -27,7 +27,18 @@ jobs:
 
 Please fix the requested changes and push them to the same branch.
 
-After that, change the label back to:
+Check failure on line 28 in:
+.github/workflows/notify-rejection.yml
+
+**GitHub Actions**
+/ .github/workflows/notify-rejection.yml
+
+**Error:**
+Invalid workflow file
+
+You have an error in your YAML syntax on line 28.
+
+After fixing the issue, change the label back to:
 
 status: ready-for-review`
             })
