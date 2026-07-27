@@ -87,17 +87,26 @@ jobs:
             cd ~/devops-system-process-v2
 
             git fetch origin
-            git checkout production
-            git pull origin production
+            git checkout -f production
+            git reset --hard origin/production
 
             npm ci
             npm run build
 
-            # Restart React app on port 8385 only
-            pkill -f 'react-scripts' || true
-            sleep 1
+            # Kill whatever is on port 8385.
+            # Do NOT use pkill -f react-scripts: the bash -c script itself
+            # contains that string, so pkill SIGTERMs this shell (exit 143).
+            if command -v fuser >/dev/null 2>&1; then
+              fuser -k 8385/tcp 2>/dev/null || true
+            else
+              for pid in \$(ss -lptn 'sport = :8385' 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u); do
+                kill \"\$pid\" 2>/dev/null || true
+              done
+            fi
+            sleep 2
+
             HOST=0.0.0.0 PORT=8385 BROWSER=none nohup npm start > ~/devops-system-process-v2/react.log 2>&1 &
-            sleep 5
+            sleep 8
             ss -lntp | grep 8385
           "
 
