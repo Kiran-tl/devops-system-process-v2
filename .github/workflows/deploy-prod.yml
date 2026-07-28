@@ -38,6 +38,7 @@ jobs:
     outputs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       version: ${{ steps.resolve.outputs.version }}
+      should_merge: ${{ steps.resolve.outputs.should_merge }}
 
     steps:
       - name: "Confirm manual production trigger"
@@ -70,11 +71,6 @@ jobs:
             console.log('PR head branch:', pr.data.head.ref);
             console.log('Version:', version);
 
-            if (pr.data.state !== 'open') {
-              core.setFailed(`❌ Deploy aborted. PR #${prNumber} must be open.`);
-              return;
-            }
-
             if (pr.data.base.ref !== 'production') {
               core.setFailed(
                 `❌ Deploy aborted. PR #${prNumber} must target the production branch.`
@@ -82,7 +78,12 @@ jobs:
               return;
             }
 
-            if (!labels.includes('approved-for-production')) {
+            const isOpen = pr.data.state === 'open';
+            const approved = labels.includes('approved-for-production');
+            const alreadyDeployed = labels.includes('deployed-to-production');
+
+            // Open PRs need approved-for-production. Merged PRs can be redeployed.
+            if (isOpen && !approved) {
               core.setFailed(
                 `❌ Deploy aborted. PR #${prNumber} does not have the ` +
                 `"approved-for-production" label.`
@@ -90,8 +91,14 @@ jobs:
               return;
             }
 
+            if (!isOpen && pr.data.merged !== true && !alreadyDeployed) {
+              core.setFailed(`❌ Deploy aborted. PR #${prNumber} is closed and was not merged.`);
+              return;
+            }
+
             core.setOutput('pr_number', String(prNumber));
             core.setOutput('version', version);
+            core.setOutput('should_merge', isOpen ? 'true' : 'false');
             core.info(`✅ Manual production deploy allowed for PR #${prNumber} (v${version})`);
 
   deploy:
@@ -124,6 +131,7 @@ jobs:
           fetch-depth: 0
 
       - name: Merge approved PR into production
+        if: needs.validate.outputs.should_merge == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -136,6 +144,15 @@ jobs:
           # Merge the staging → production PR so production has the approved code
           gh pr merge "$PR_NUMBER" --merge --admin --delete-branch=false
 
+          git fetch origin production
+          git checkout -B production origin/production
+          git reset --hard origin/production
+          echo "Production HEAD: $(git rev-parse --short HEAD)"
+
+      - name: Sync production checkout
+        if: needs.validate.outputs.should_merge != 'true'
+        run: |
+          set -euo pipefail
           git fetch origin production
           git checkout -B production origin/production
           git reset --hard origin/production
