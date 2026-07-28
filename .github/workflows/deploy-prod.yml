@@ -97,6 +97,9 @@ jobs:
       - self-hosted
       - Linux
       - X64
+    environment:
+      name: production
+      url: http://172.16.16.121:8385/
 
     env:
       LXD_CONTAINER: myapp
@@ -105,6 +108,7 @@ jobs:
       - name: "Confirm production deploy"
         run: |
           echo "Workflow : Label approved-for-production → Deploy Production"
+          echo "Approval : This job waits for GitHub production environment approval"
           echo "PR       : #${{ needs.validate.outputs.pr_number }}"
           echo "Version  : ${{ needs.validate.outputs.version }}"
           echo "Branch   : production"
@@ -143,6 +147,11 @@ jobs:
           git fetch origin
           git checkout -f production
           git reset --hard origin/production
+
+          cat > .env <<'EOF'
+          REACT_APP_DEPLOYMENT_STAGE=production
+          REACT_APP_DEPLOYMENT_LABEL=Deployed to Production
+          EOF
 
           npm ci
           npm run build

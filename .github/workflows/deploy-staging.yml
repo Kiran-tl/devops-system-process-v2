@@ -42,6 +42,9 @@ jobs:
       - self-hosted
       - Linux
       - X64
+    environment:
+      name: staging
+      url: http://172.16.16.121:8385/
 
     env:
       LXD_CONTAINER: myapp
@@ -71,6 +74,11 @@ jobs:
           git fetch origin
           git checkout -f "$BRANCH"
           git reset --hard "origin/$BRANCH"
+
+          cat > .env <<'EOF'
+          REACT_APP_DEPLOYMENT_STAGE=staging
+          REACT_APP_DEPLOYMENT_LABEL=Deployed to Staging
+          EOF
 
           npm ci
           npm run build
