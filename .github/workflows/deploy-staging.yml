@@ -10,6 +10,8 @@ name: "Label: approved-for-staging → Deploy Staging"
 on:
   # Fires when ANY label is added to a PR. Job `if` keeps only approved-for-staging.
   pull_request_target:
+    branches:
+      - staging
     types:
       - labeled
   # Manual redeploy (Actions → this workflow → Run workflow)
@@ -75,9 +77,10 @@ jobs:
           git checkout -f "$BRANCH"
           git reset --hard "origin/$BRANCH"
 
-          cat > .env <<'EOF'
+          cat > .env <<EOF
           REACT_APP_DEPLOYMENT_STAGE=staging
           REACT_APP_DEPLOYMENT_LABEL=Deployed to Staging
+          REACT_APP_BUILD_VERSION=${BRANCH}
           EOF
 
           # Stop the previous app before reinstalling dependencies from the same worktree.

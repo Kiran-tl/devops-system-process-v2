@@ -6,6 +6,7 @@ function App() {
     process.env.REACT_APP_DEPLOYMENT_LABEL ||
     (deploymentStage === 'staging' ? 'Deployed to Staging' : 'Deployed to Production');
   const deploymentBadgeColor = deploymentStage === 'staging' ? '#f59e0b' : '#28a745';
+  const buildVersion = process.env.REACT_APP_BUILD_VERSION || 'local';
 
   return (
     <div style={{
@@ -43,6 +44,9 @@ function App() {
         }}>
           {deploymentLabel}
         </div>
+        <p style={{ fontSize: '0.95rem', color: '#cbd5e0', margin: '16px 0 0' }}>
+          Build Version: <strong>{buildVersion}</strong>
+        </p>
       </div>
     </div>
   );
