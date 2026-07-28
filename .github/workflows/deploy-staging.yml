@@ -1,12 +1,20 @@
-name: Deploy to Staging
+# =============================================================================
+# LABEL → ACTION MAP (Staging)
+# =============================================================================
+#   approved-for-staging   →  RUN this workflow (deploy feature branch to staging)
+#   deployed-to-staging    →  SET automatically after a successful deploy
+#   approved-for-production→  does NOT run this workflow (see deploy-prod.yml)
+# =============================================================================
+name: "Label: approved-for-staging → Deploy Staging"
 
-# pull_request_target: always use this workflow from the PR base (staging/main),
-# not an outdated copy on the feature branch.
-# workflow_dispatch: manual redeploy without needing a PR label.
 on:
+  # Fires when ANY label is added to a PR. Job `if` keeps only approved-for-staging.
   pull_request_target:
+    branches:
+      - staging
     types:
       - labeled
+  # Manual redeploy (Actions → this workflow → Run workflow)
   workflow_dispatch:
     inputs:
       branch:
@@ -26,7 +34,9 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to Staging Environment
+    name: "approved-for-staging → Deploy to Staging"
+    # Only run when the label that was just added is approved-for-staging
+    # (or when started manually from the Actions tab)
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'approved-for-staging'
@@ -34,12 +44,23 @@ jobs:
       - self-hosted
       - Linux
       - X64
+    environment:
+      name: staging
+      url: http://172.16.16.121:8385/
 
     env:
       LXD_CONTAINER: myapp
       BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.pull_request.head.ref }}
 
     steps:
+      - name: "Confirm trigger (approved-for-staging)"
+        run: |
+          echo "Workflow : Label approved-for-staging → Deploy Staging"
+          echo "Trigger  : ${{ github.event_name }}"
+          echo "Label    : ${{ github.event.label.name || 'n/a (manual run)' }}"
+          echo "Branch   : ${BRANCH}"
+          echo "PR       : #${{ github.event.pull_request.number || 'n/a' }}"
+
       - name: Verify container exists
         run: |
           lxc info "$LXD_CONTAINER"
@@ -56,10 +77,13 @@ jobs:
           git checkout -f "$BRANCH"
           git reset --hard "origin/$BRANCH"
 
-          npm ci
-          npm run build
+          cat > .env <<EOF
+          REACT_APP_DEPLOYMENT_STAGE=staging
+          REACT_APP_DEPLOYMENT_LABEL=Deployed to Staging
+          REACT_APP_BUILD_VERSION=${BRANCH}
+          EOF
 
-          # Free port 8385 only — never pkill by process name (can SIGTERM this shell → exit 143)
+          # Stop the previous app before reinstalling dependencies from the same worktree.
           if command -v fuser >/dev/null 2>&1; then
             fuser -k 8385/tcp 2>/dev/null || true
           else
@@ -67,7 +91,12 @@ jobs:
               kill "$pid" 2>/dev/null || true
             done
           fi
+          pkill -f "react-scripts start" 2>/dev/null || true
+          rm -rf node_modules/.cache
           sleep 2
+
+          npm ci
+          npm run build
 
           HOST=0.0.0.0 PORT=8385 BROWSER=none \
             nohup npm start > ~/devops-system-process-v2/react.log 2>&1 &
@@ -86,7 +115,7 @@ jobs:
           exit 1
           DEPLOY
 
-      - name: Update labels
+      - name: "Swap labels: approved-for-staging → deployed-to-staging"
         if: success() && github.event_name == 'pull_request_target'
         uses: actions/github-script@v7
         with:
@@ -111,7 +140,18 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue,
-              body: '✅ Successfully deployed to Staging.'
+              body: [
+                '## ✅ Staging deploy succeeded',
+                '',
+                '| Item | Value |',
+                '|------|-------|',
+                '| Trigger label | `approved-for-staging` |',
+                '| Result label | `deployed-to-staging` |',
+                '| Branch deployed | `${{ env.BRANCH }}` |',
+                '| URL | http://172.16.16.121:8385/ |',
+                '',
+                'Next: after QA, add label **`approved-for-production`** to deploy production.'
+              ].join('\n')
             });
 
       - name: Deployment failed
@@ -123,5 +163,11 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body: '❌ Staging deployment failed. Please check the GitHub Actions logs.'
+              body: [
+                '## ❌ Staging deploy failed',
+                '',
+                'Triggered by label `approved-for-staging`.',
+                'Check the Actions run: **Label: approved-for-staging → Deploy Staging**.',
+                'Fix the issue, then re-add `approved-for-staging` to retry.'
+              ].join('\n')
             });

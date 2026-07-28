@@ -1,14 +1,27 @@
-name: Deploy to Production
+# =============================================================================
+# LABEL → ACTION MAP (Production)
+# =============================================================================
+#   approved-for-production → TRIGGER production pipeline
+#   deployed-to-production  → SET automatically after a successful deploy
+#   approved-for-staging    → does NOT run this workflow (see deploy-staging.yml)
+# =============================================================================
+name: "Label: approved-for-production → Deploy Production"
 
 on:
+  pull_request_target:
+    branches:
+      - production
+    types:
+      - labeled
+  # Manual production deploy after PR to production has approved-for-production label.
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to deploy to production'
+        description: 'Production PR number (must target production and have approved-for-production label)'
         required: true
         type: string
       version:
-        description: 'Release version (example 1.0.0)'
+        description: 'Release version shown in UI and used for the git tag (example 1.0.0)'
         required: true
         type: string
 
@@ -17,50 +30,95 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   validate:
-    name: Validate PR approval
+    name: "Validate production label and PR target"
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'approved-for-production'
     runs-on: ubuntu-latest
     outputs:
-      pr_title: ${{ steps.get_pr.outputs.title }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      version: ${{ steps.resolve.outputs.version }}
 
     steps:
-      - name: Validate label and extract PR info
-        id: get_pr
+      - name: "Confirm trigger (approved-for-production)"
+        id: resolve
         uses: actions/github-script@v7
         with:
           script: |
+            const eventName = context.eventName;
+            let prNumber;
+            let version;
+
+            if (eventName === 'workflow_dispatch') {
+              prNumber = parseInt('${{ inputs.pr_number }}', 10);
+              version = '${{ inputs.version }}';
+            } else {
+              prNumber = context.payload.pull_request.number;
+              const d = new Date();
+              const stamp = d.toISOString().slice(0, 10).replace(/-/g, '');
+              version = `prod-${stamp}-${context.runNumber}`;
+            }
+
             const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: parseInt('${{ inputs.pr_number }}')
+              pull_number: prNumber
             });
 
             const labels = pr.data.labels.map(l => l.name);
             console.log('PR Labels:', labels);
+            console.log('Trigger:', eventName);
+            console.log('Expected label: approved-for-production');
+            console.log('PR base branch:', pr.data.base.ref);
 
-            if (!labels.includes('approved-for-production')) {
+            if (pr.data.base.ref !== 'production') {
               core.setFailed(
-                `❌ Deploy aborted. PR #${{ inputs.pr_number }} does not have the ` +
-                `"approved-for-production" label. QA must approve before deploying.`
+                `❌ Deploy aborted. PR #${prNumber} must target the production branch.`
               );
               return;
             }
 
-            core.setOutput('title', pr.data.title);
+            if (!labels.includes('approved-for-production')) {
+              core.setFailed(
+                `❌ Deploy aborted. PR #${prNumber} does not have the ` +
+                `"approved-for-production" label. Add that label before running production deploy.`
+              );
+              return;
+            }
+
+            core.setOutput('pr_number', String(prNumber));
+            core.setOutput('version', version);
+            core.info(`✅ approved-for-production OK — production pipeline triggered (tag: ${version})`);
 
   deploy:
-    name: Deploy to Production Environment
+    name: "approved-for-production → Deploy to Production"
     needs: validate
     runs-on:
       - self-hosted
       - Linux
       - X64
+    environment:
+      name: production
+      url: http://172.16.16.121:8385/
 
     env:
       LXD_CONTAINER: myapp
 
     steps:
+      - name: "Confirm production deploy"
+        run: |
+          echo "Workflow : Label approved-for-production → Deploy Production"
+          echo "Approval : Waiting for production environment approval before deploy"
+          echo "PR       : #${{ needs.validate.outputs.pr_number }}"
+          echo "Version  : ${{ needs.validate.outputs.version }}"
+          echo "Branch   : production"
+
       - name: Checkout production
         uses: actions/checkout@v4
         with:
@@ -68,12 +126,18 @@ jobs:
           fetch-depth: 0
 
       - name: Create Release Tag
+        if: needs.validate.outputs.version != ''
         run: |
+          VERSION="${{ needs.validate.outputs.version }}"
           git config user.name github-actions
           git config user.email github-actions@github.com
 
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists — skipping create"
+          else
+            git tag "v${VERSION}"
+            git push origin "v${VERSION}"
+          fi
 
       - name: Verify LXD container
         run: |
@@ -90,10 +154,13 @@ jobs:
           git checkout -f production
           git reset --hard origin/production
 
-          npm ci
-          npm run build
+          cat > .env <<EOF
+          REACT_APP_DEPLOYMENT_STAGE=production
+          REACT_APP_DEPLOYMENT_LABEL=Deployed to Production
+          REACT_APP_BUILD_VERSION=${{ needs.validate.outputs.version }}
+          EOF
 
-          # Free port 8385 only — never pkill by process name (can SIGTERM this shell → exit 143)
+          # Stop the previous app before reinstalling dependencies from the same worktree.
           if command -v fuser >/dev/null 2>&1; then
             fuser -k 8385/tcp 2>/dev/null || true
           else
@@ -101,7 +168,12 @@ jobs:
               kill "$pid" 2>/dev/null || true
             done
           fi
+          pkill -f "react-scripts start" 2>/dev/null || true
+          rm -rf node_modules/.cache
           sleep 2
+
+          npm ci
+          npm run build
 
           HOST=0.0.0.0 PORT=8385 BROWSER=none \
             nohup npm start > ~/devops-system-process-v2/react.log 2>&1 &
@@ -120,12 +192,12 @@ jobs:
           exit 1
           DEPLOY
 
-      - name: Update PR labels
+      - name: "Swap labels: approved-for-production → deployed-to-production"
         if: success()
         uses: actions/github-script@v7
         with:
           script: |
-            const issue = Number('${{ inputs.pr_number }}');
+            const issue = Number('${{ needs.validate.outputs.pr_number }}');
 
             await github.rest.issues.removeLabel({
               owner: context.repo.owner,
@@ -145,5 +217,35 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue,
-              body: '🚀 Production deployment completed successfully.'
+              body: [
+                '## 🚀 Production deploy succeeded',
+                '',
+                '| Item | Value |',
+                '|------|-------|',
+                '| Trigger type | `approved-for-production` label or manual run |',
+                '| Required label | `approved-for-production` |',
+                '| Result label | `deployed-to-production` |',
+                '| Branch deployed | `production` |',
+                '| Version tag | `v${{ needs.validate.outputs.version }}` |',
+                '| URL | http://172.16.16.121:8385/ |'
+              ].join('\n')
+            });
+
+      - name: Deployment failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = Number('${{ needs.validate.outputs.pr_number }}');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue,
+              body: [
+                '## ❌ Production deploy failed',
+                '',
+                'Production deploy failed.',
+                'PR must target `production` and have label `approved-for-production`.',
+                'Check the Actions run: **Label: approved-for-production → Deploy Production** and rerun it after fixing the issue.'
+              ].join('\n')
             });
