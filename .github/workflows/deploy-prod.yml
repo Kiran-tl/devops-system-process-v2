@@ -1,28 +1,23 @@
 # =============================================================================
 # LABEL → ACTION MAP (Production)
 # =============================================================================
-#   approved-for-production → RUN this workflow (deploy production branch)
+#   approved-for-production → ALLOW manual production deploy
 #   deployed-to-production  → SET automatically after a successful deploy
 #   approved-for-staging    → does NOT run this workflow (see deploy-staging.yml)
 # =============================================================================
-name: "Label: approved-for-production → Deploy Production"
+name: "Manual: Deploy Production"
 
 on:
-  # Fires when ANY label is added to a PR. Job `if` keeps only approved-for-production.
-  pull_request_target:
-    types:
-      - labeled
-  # Manual redeploy (Actions → this workflow → Run workflow)
+  # Manual production deploy after PR to production has approved-for-production label.
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to update labels on after deploy'
+        description: 'Production PR number (must target production and have approved-for-production label)'
         required: true
         type: string
       version:
-        description: 'Release version tag (example 1.0.0). Leave empty to skip tagging.'
-        required: false
-        default: ''
+        description: 'Release version shown in UI and used for the git tag (example 1.0.0)'
+        required: true
         type: string
 
 permissions:
@@ -36,10 +31,7 @@ concurrency:
 
 jobs:
   validate:
-    name: "Check label approved-for-production"
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'approved-for-production'
+    name: "Validate production label and PR target"
     runs-on: ubuntu-latest
     outputs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
@@ -52,19 +44,8 @@ jobs:
         with:
           script: |
             const eventName = context.eventName;
-            let prNumber;
-            let version = '';
-
-            if (eventName === 'workflow_dispatch') {
-              prNumber = parseInt('${{ inputs.pr_number }}', 10);
-              version = '${{ inputs.version }}';
-            } else {
-              prNumber = context.payload.pull_request.number;
-              // Auto version from date + run number when triggered by label
-              const d = new Date();
-              const stamp = d.toISOString().slice(0, 10).replace(/-/g, '');
-              version = `1.0.${stamp}-${context.runNumber}`;
-            }
+            const prNumber = parseInt('${{ inputs.pr_number }}', 10);
+            const version = '${{ inputs.version }}';
 
             const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
@@ -76,19 +57,26 @@ jobs:
             console.log('PR Labels:', labels);
             console.log('Trigger:', eventName);
             console.log('Expected label: approved-for-production');
+            console.log('PR base branch:', pr.data.base.ref);
 
-            // Label event already filtered by job if; still verify for manual runs
-            if (eventName === 'workflow_dispatch' && !labels.includes('approved-for-production')) {
+            if (pr.data.base.ref !== 'production') {
+              core.setFailed(
+                `❌ Deploy aborted. PR #${prNumber} must target the production branch.`
+              );
+              return;
+            }
+
+            if (!labels.includes('approved-for-production')) {
               core.setFailed(
                 `❌ Deploy aborted. PR #${prNumber} does not have the ` +
-                `"approved-for-production" label. Add that label (or use it to auto-trigger).`
+                `"approved-for-production" label. Add that label before using Run workflow.`
               );
               return;
             }
 
             core.setOutput('pr_number', String(prNumber));
             core.setOutput('version', version);
-            core.info(`✅ approved-for-production OK — will deploy production (tag: ${version || 'none'})`);
+            core.info(`✅ approved-for-production OK — manual production deploy allowed (tag: ${version})`);
 
   deploy:
     name: "approved-for-production → Deploy to Production"
@@ -107,8 +95,8 @@ jobs:
     steps:
       - name: "Confirm production deploy"
         run: |
-          echo "Workflow : Label approved-for-production → Deploy Production"
-          echo "Approval : This job waits for GitHub production environment approval"
+          echo "Workflow : Manual Deploy Production"
+          echo "Approval : PR must already have approved-for-production label"
           echo "PR       : #${{ needs.validate.outputs.pr_number }}"
           echo "Version  : ${{ needs.validate.outputs.version }}"
           echo "Branch   : production"
@@ -148,9 +136,10 @@ jobs:
           git checkout -f production
           git reset --hard origin/production
 
-          cat > .env <<'EOF'
+          cat > .env <<EOF
           REACT_APP_DEPLOYMENT_STAGE=production
           REACT_APP_DEPLOYMENT_LABEL=Deployed to Production
+          REACT_APP_BUILD_VERSION=${{ needs.validate.outputs.version }}
           EOF
 
           # Stop the previous app before reinstalling dependencies from the same worktree.
@@ -215,7 +204,8 @@ jobs:
                 '',
                 '| Item | Value |',
                 '|------|-------|',
-                '| Trigger label | `approved-for-production` |',
+                '| Trigger type | `Run workflow` (manual) |',
+                '| Required label | `approved-for-production` |',
                 '| Result label | `deployed-to-production` |',
                 '| Branch deployed | `production` |',
                 '| Version tag | `v${{ needs.validate.outputs.version }}` |',
@@ -236,8 +226,8 @@ jobs:
               body: [
                 '## ❌ Production deploy failed',
                 '',
-                'Triggered by label `approved-for-production`.',
-                'Check the Actions run: **Label: approved-for-production → Deploy Production**.',
-                'Fix the issue, then re-add `approved-for-production` to retry.'
+                'Manual production deploy failed.',
+                'PR must target `production` and have label `approved-for-production`.',
+                'Check the Actions run: **Manual: Deploy Production** and rerun it after fixing the issue.'
               ].join('\n')
             });
