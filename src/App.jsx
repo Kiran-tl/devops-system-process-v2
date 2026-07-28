@@ -1,6 +1,12 @@
 import React from 'react';
 
 function App() {
+  const deploymentStage = process.env.REACT_APP_DEPLOYMENT_STAGE || 'production';
+  const deploymentLabel =
+    process.env.REACT_APP_DEPLOYMENT_LABEL ||
+    (deploymentStage === 'staging' ? 'Deployed to Staging' : 'Deployed to Production');
+  const deploymentBadgeColor = deploymentStage === 'staging' ? '#f59e0b' : '#28a745';
+
   return (
     <div style={{
       minHeight: '100vh',
@@ -29,13 +35,13 @@ function App() {
         <div style={{
           display: 'inline-block',
           padding: '6px 16px',
-          background: '#28a745',
+          background: deploymentBadgeColor,
           borderRadius: '20px',
           fontSize: '0.85rem',
           fontWeight: '600',
           letterSpacing: '0.5px'
         }}>
-          {process.env.REACT_APP_ENV || 'production'} environment
+          {deploymentLabel}
         </div>
       </div>
     </div>
