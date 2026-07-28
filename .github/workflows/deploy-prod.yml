@@ -153,10 +153,7 @@ jobs:
           REACT_APP_DEPLOYMENT_LABEL=Deployed to Production
           EOF
 
-          npm ci
-          npm run build
-
-          # Free port 8385 only — never pkill by process name (can SIGTERM this shell → exit 143)
+          # Stop the previous app before reinstalling dependencies from the same worktree.
           if command -v fuser >/dev/null 2>&1; then
             fuser -k 8385/tcp 2>/dev/null || true
           else
@@ -164,7 +161,12 @@ jobs:
               kill "$pid" 2>/dev/null || true
             done
           fi
+          pkill -f "react-scripts start" 2>/dev/null || true
+          rm -rf node_modules/.cache
           sleep 2
+
+          npm ci
+          npm run build
 
           HOST=0.0.0.0 PORT=8385 BROWSER=none \
             nohup npm start > ~/devops-system-process-v2/react.log 2>&1 &
